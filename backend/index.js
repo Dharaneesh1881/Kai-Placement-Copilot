@@ -6,7 +6,9 @@ const mongoose = require("mongoose");
 const jwt = require("jsonwebtoken");
 const z = require("zod");
 const userModel = require("./db");
+const { OAuth2Client } = require('google-auth-library');
 
+const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 const port = process.env.PORT || 3000;
 mongoose.connect(process.env.MONGO_URI);
@@ -149,25 +151,78 @@ app.post("/login", async function (req, res) {
 
 });
 
+app.post("/google-login", async function (req, res) {
+  const { credential, clientId } = req.body;
+  if (!credential) {
+    return res.status(400).json({ message: "Google credential missing" });
+  }
 
+  try {
+    const ticket = await googleClient.verifyIdToken({
+      idToken: credential,
+      audience: clientId || process.env.GOOGLE_CLIENT_ID,
+    });
+    const payload = ticket.getPayload();
+    const { email, name, picture } = payload;
 
+    let user = await userModel.findOne({ email });
 
+    if (!user) {
+      // Create user if they don't exist
+      try {
+        const randomPassword = await bcrypt.hash(Math.random().toString(36).slice(-8), 5);
+        user = await userModel.create({
+          name: name,
+          email: email,
+          profile_url: picture,
+          password: randomPassword
+        });
+      } catch (err) {
+        // Fallback in case the name is already taken
+        if (err.code === 11000 && err.keyPattern && err.keyPattern.name) {
+          const randomSuffix = Math.floor(Math.random() * 10000).toString();
+          const randomPassword = await bcrypt.hash(Math.random().toString(36).slice(-8), 5);
+          user = await userModel.create({
+            name: name + "_" + randomSuffix,
+            email: email,
+            profile_url: picture,
+            password: randomPassword
+          });
+        } else {
+          throw err;
+        }
+      }
+    } else {
+      // Update profile picture if missing
+      if (!user.profile_url || user.profile_url === "https://res.cloudinary.com/dbqdx1m4t/image/upload/v1771181818/profile_pics/nwirmfxg3fi59tqnxyyj.jpg") {
+        user.profile_url = picture;
+        await user.save();
+      }
+    }
 
+    const token = jwt.sign({
+      id: user._id
+    }, JWT_SECRET);
 
+    const isProduction = (process.env.CORS_ORIGINS || "").includes("https");
+    res.cookie("token", token, {
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: isProduction ? "none" : "lax"
+    });
 
+    res.json({
+      message: "Google Login success",
+      token: token,
+      name: user.name,
+      profile_url: user.profile_url || picture
+    });
 
-
-
-
-
-
-
-
-
-
-
-
-
+  } catch (error) {
+    console.error("Google verify error:", error);
+    res.status(403).json({ message: "Invalid Google credential" });
+  }
+});
 app.listen(port, () => {
-    console.log(`Server running on port ${port}`);
+  console.log(`Server running on port ${port}`);
 });
