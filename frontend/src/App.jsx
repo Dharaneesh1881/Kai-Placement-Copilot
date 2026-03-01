@@ -26,10 +26,16 @@ function App() {
     }
 
     <GoogleLogin
-      onSuccess={res => {
-        console.log(res);
-        console.log(jwtDecode(res.credential));
-        setIsHome(true);
+      onSuccess={async (res) => {
+        const response = await fetch("http://localhost:3000/google-login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ credential: res.credential })
+        });
+        const data = await response.json();
+        if (response.ok) {
+          setIsHome(true);
+        }
       }}
       onError={() => {
         console.log('Login Failed');
